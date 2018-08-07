@@ -1,11 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"sort"
 )
@@ -49,49 +50,71 @@ func (t token) Hash() int {
 func processText(raws []byte) []byte {
 	// ASCII only
 	for idx, b := range raws {
-		if b >= 'a' && b <= 'z' {
-		} else if b >= 'A' && b <= 'Z' {
-			b = b + 32
-		} else {
-			b = 0
-		}
-		raws[idx] = b
+		raws[idx] = processTextByte(b)
 	}
 	return raws
 }
 
-func tokenize(ctx context.Context, raws []byte) chan token {
+func processTextByte(b byte) byte {
+	// ASCII only
+	if b >= 'a' && b <= 'z' {
+		return b
+	} else if b >= 'A' && b <= 'Z' {
+		return b + 32
+	} else {
+		return 0
+	}
+}
+
+func tokenizeReader(ctx context.Context, reader io.Reader) chan token {
 	c := make(chan token)
 	go func() {
 		defer close(c)
-		s := -1
-		for i := 0; i < len(raws)+1; i++ {
-			t := token(nil)
-			if i >= len(raws) {
-				if s >= 0 {
-					t = token(raws[s:i])
+		tbuf := make([]byte, 0)
+		rbuf := make([]byte, 1024)
+		for true {
+			n, err := reader.Read(rbuf)
+			if err == io.EOF {
+				if len(tbuf) > 0 {
+					c <- token(tbuf)
 				}
-			} else {
-				if s < 0 && raws[i] > 0 {
-					s = i
-				} else if s >= 0 && raws[i] <= 0 {
-					t = token(raws[s:i])
-					s = -1
-				}
+				return
+			} else if err != nil {
+				panic(err)
 			}
 
-			if t != nil {
-				select {
-				case c <- t:
-					break
-				case <-ctx.Done():
-					return
+			for i := 0; i < n; i++ {
+				t := token(nil)
+				b := processTextByte(rbuf[i])
+
+				if b == 0 {
+					if n := len(tbuf); n > 0 {
+						temp := make([]byte, n)
+						copy(temp, tbuf)
+						t = token(temp)
+						tbuf = tbuf[:0]
+					}
+				} else {
+					tbuf = append(tbuf, b)
+				}
+
+				if t != nil {
+					select {
+					case c <- t:
+						break
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}
 	}()
 
 	return c
+}
+
+func tokenize(ctx context.Context, raws []byte) chan token {
+	return tokenizeReader(ctx, bytes.NewReader(raws))
 }
 
 type frequency struct {
@@ -200,18 +223,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Read and process file
-	raws, err := ioutil.ReadAll(f)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot read file, %s\n", err.Error())
-		os.Exit(1)
-	}
-
-	raws = processText(raws)
-
-	// Tokenize and count
+	// Tokenize and count (streaming read)
 	fc, _ := newFrequencyCounter(1000)
-	for t := range tokenize(context.Background(), raws) {
+	for t := range tokenizeReader(context.Background(), f) {
 		fc.Add(t)
 	}
 
