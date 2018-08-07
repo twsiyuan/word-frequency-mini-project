@@ -59,6 +59,12 @@ func (t token) Less(v token) bool {
 	return true
 }
 
+func (t token) Clone() token {
+	b := make([]byte, len(t))
+	copy(b, t)
+	return token(b)
+}
+
 func processText(raws []byte) []byte {
 	// ASCII only
 	for idx, b := range raws {
@@ -79,10 +85,12 @@ func processTextByte(b byte) byte {
 }
 
 func tokenizeReader(ctx context.Context, reader io.Reader) chan token {
+	// Iterator pattern
 	c := make(chan token)
 	go func() {
 		defer close(c)
 		tbuf := make([]byte, 0)
+		tbuf2 := make([]byte, 0)
 		rbuf := make([]byte, 1024)
 		for true {
 			n, err := reader.Read(rbuf)
@@ -100,11 +108,8 @@ func tokenizeReader(ctx context.Context, reader io.Reader) chan token {
 				b := processTextByte(rbuf[i])
 
 				if b == 0 {
-					if n := len(tbuf); n > 0 {
-						temp := make([]byte, n)
-						copy(temp, tbuf)
-						t = token(temp)
-						tbuf = tbuf[:0]
+					if len(tbuf) > 0 {
+						t = token(tbuf)
 					}
 				} else {
 					tbuf = append(tbuf, b)
@@ -117,6 +122,9 @@ func tokenizeReader(ctx context.Context, reader io.Reader) chan token {
 					case <-ctx.Done():
 						return
 					}
+					// Goroutine need switch buffer to avoid error (did not clone buffer)
+					tbuf, tbuf2 = tbuf2, tbuf
+					tbuf = tbuf[:0]
 				}
 			}
 		}
@@ -210,7 +218,7 @@ func (fc *frequencyCounter) Add(t token) {
 
 	// No hit, add one
 	fc.cap[idx] = append(data, frequency{
-		Token: t,
+		Token: t.Clone(),
 		Count: 1,
 	})
 	fc.count++
