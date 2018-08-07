@@ -47,6 +47,18 @@ func (t token) Hash() int {
 	return hash
 }
 
+func (t token) Less(v token) bool {
+	for i := 0; i < len(t); i++ {
+		if i >= len(v) {
+			return true
+		}
+		if t[i] != v[i] {
+			return t[i] < v[i]
+		}
+	}
+	return true
+}
+
 func processText(raws []byte) []byte {
 	// ASCII only
 	for idx, b := range raws {
@@ -133,6 +145,11 @@ func (fs frequencySorter) Swap(i, j int) {
 }
 
 func (fs frequencySorter) Less(i, j int) bool {
+	vi := fs[i]
+	vj := fs[j]
+	if vi.Count == vj.Count {
+		return !vi.Token.Less(vj.Token)
+	}
 	return fs[i].Count > fs[j].Count
 }
 
